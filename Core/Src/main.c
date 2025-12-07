@@ -29,6 +29,7 @@
 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
+#include "rc522.h"
 
 /* USER CODE END Includes */
 
@@ -82,6 +83,7 @@ volatile uint16_t keypad_interrupt_pin = 0;
 
 // Room control system instance
 room_control_t room_system;
+room_control_t myRoom;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -231,6 +233,7 @@ int main(void)
     // TODO: TAREA - Leer sensor de temperatura y actualizar sistema
     // float temperature = temperature_sensor_read();
     // room_control_set_temperature(&room_system, temperature);
+    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

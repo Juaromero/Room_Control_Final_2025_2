@@ -6,55 +6,32 @@
 #include <stdbool.h>
 
 #define PASSWORD_LENGTH 4
-#define MAX_TEMP_READINGS 5
 
+// Estados del sistema (Lógica nueva)
 typedef enum {
-    ROOM_STATE_LOCKED,
-    ROOM_STATE_UNLOCKED,
-    ROOM_STATE_INPUT_PASSWORD,
-    ROOM_STATE_ACCESS_DENIED,
-    ROOM_STATE_EMERGENCY
-} room_state_t;
-
-typedef enum {
-    FAN_LEVEL_OFF = 0,    // 0% PWM
-    FAN_LEVEL_LOW = 30,   // 30% PWM  
-    FAN_LEVEL_MED = 70,   // 70% PWM
-    FAN_LEVEL_HIGH = 100  // 100% PWM
-} fan_level_t;
+    STATE_IDLE,           // Esperando tarjeta
+    STATE_CARD_OK,        // Tarjeta leída OK -> Accionar Servo/LED
+    STATE_WAITING_KEY,    // Esperando clave del teclado
+    STATE_SENDING_DATA,   // Enviando a ESP-01
+    STATE_RESET           // Reiniciando
+} system_state_t;
 
 typedef struct {
-    room_state_t current_state;
-    char password[PASSWORD_LENGTH + 1];
+    system_state_t current_state;
+    
+    // Datos
+    uint8_t cardID[5];
     char input_buffer[PASSWORD_LENGTH + 1];
     uint8_t input_index;
-    uint32_t last_input_time;
+    
+    // Tiempos
     uint32_t state_enter_time;
     
-    // Door control
-    bool door_locked;
-    
-    // Temperature and fan control  
-    float current_temperature;
-    fan_level_t current_fan_level;
-    bool manual_fan_override;
-    
-    // Display update flags
-    bool display_update_needed;
 } room_control_t;
 
-// Public functions
+// Funciones públicas
 void room_control_init(room_control_t *room);
 void room_control_update(room_control_t *room);
-void room_control_process_key(room_control_t *room, char key);
-void room_control_set_temperature(room_control_t *room, float temperature);
-void room_control_force_fan_level(room_control_t *room, fan_level_t level);
-void room_control_change_password(room_control_t *room, const char *new_password);
-
-// Status getters
-room_state_t room_control_get_state(room_control_t *room);
-bool room_control_is_door_locked(room_control_t *room);
-fan_level_t room_control_get_fan_level(room_control_t *room);
-float room_control_get_temperature(room_control_t *room);
+void room_control_set_servo(uint8_t angle);
 
 #endif
