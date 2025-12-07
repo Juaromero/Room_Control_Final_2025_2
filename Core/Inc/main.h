@@ -62,6 +62,10 @@ void Error_Handler(void);
 #define B1_Pin GPIO_PIN_13
 #define B1_GPIO_Port GPIOC
 #define B1_EXTI_IRQn EXTI15_10_IRQn
+#define RFID_MISO_Pin GPIO_PIN_2
+#define RFID_MISO_GPIO_Port GPIOC
+#define RFID_MOSI_Pin GPIO_PIN_3
+#define RFID_MOSI_GPIO_Port GPIOC
 #define USART_TX_Pin GPIO_PIN_2
 #define USART_TX_GPIO_Port GPIOA
 #define USART_RX_Pin GPIO_PIN_3
@@ -72,9 +76,15 @@ void Error_Handler(void);
 #define LD2_GPIO_Port GPIOA
 #define FAN_PWM_Pin GPIO_PIN_6
 #define FAN_PWM_GPIO_Port GPIOA
+#define RFID_CS_Pin GPIO_PIN_4
+#define RFID_CS_GPIO_Port GPIOC
+#define RFID_RST_Pin GPIO_PIN_5
+#define RFID_RST_GPIO_Port GPIOC
 #define KEYPAD_C1_Pin GPIO_PIN_10
 #define KEYPAD_C1_GPIO_Port GPIOB
 #define KEYPAD_C1_EXTI_IRQn EXTI15_10_IRQn
+#define RFID_SCK_Pin GPIO_PIN_13
+#define RFID_SCK_GPIO_Port GPIOB
 #define KEYPAD_C4_Pin GPIO_PIN_7
 #define KEYPAD_C4_GPIO_Port GPIOC
 #define KEYPAD_C4_EXTI_IRQn EXTI9_5_IRQn
