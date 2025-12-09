@@ -9,7 +9,6 @@ typedef struct {
     uint16_t head;
     uint16_t tail;
     uint16_t capacity;
-    bool full;
 } ring_buffer_t;
 
 void ring_buffer_init(ring_buffer_t *rb, uint8_t *buffer, uint16_t capacity);

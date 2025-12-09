@@ -1,147 +1,240 @@
 #include "room_control.h"
-#include "rc522.h"
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
-#include "ring_buffer.h"  
-#include <stdio.h>
-#include <string.h>
+#include "rc522.h"
+#include "servo_control.h"
+#include <stdio.h> // Necesario para sprintf
 
-// --- VARIABLES EXTERNAS (Vienen del main.c) ---
-extern TIM_HandleTypeDef htim3;   // Servo en TIM3 Canal 1
-extern UART_HandleTypeDef huart1; // ESP-01 en UART1
-extern ring_buffer_t keypad_rb;   // Buffer del teclado (YA DEBE EXISTIR EN TU MAIN)
+// Variables externas del hardware
+extern TIM_HandleTypeDef htim3; 
+extern UART_HandleTypeDef huart2;
 
-// --- CONFIGURACIÓN ---
-static const char VALID_PASSWORD[] = "1234"; // Clave correcta
-// UID de tarjeta Maestra (Cámbialo si tu tarjeta no abre)
-static const uint8_t MY_VALID_CARD[5] = {0x33, 0x65, 0x08, 0x12, 0x90}; 
+// --- AQUI PONDRAS TU CODIGO ---
+// Por ahora déjalo así. En el monitor serial verás los números reales.
+uint8_t VALID_CARD_UID[5] = {0x1A, 0x22, 0x73, 0x80, 0xCB};
 
-// --- FUNCIÓN SERVO (Grados a PWM) ---
-void room_control_set_servo(uint8_t angle) {
-    if (angle > 180) angle = 180;
-    // Cálculo para 50Hz (ARR=19999, PSC=79)
-    // 0 grados = 500us, 180 grados = 2500us
-    uint32_t pulse = 500 + (angle * 2000 / 180);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
-}
+// Instancia del Servo
+servo_t door_servo;
 
-// --- INICIALIZACIÓN ---
+// --- Prototipos Privados ---
+static void room_control_change_state(room_control_t *room, room_state_t new_state);
+static void room_control_update_display(room_control_t *room);
+static void process_rfid_check(room_control_t *room);
+static void control_servo_action(bool open);
+static void send_log_to_esp(const char* message);
+static void clear_input(room_control_t *room);
+
+// --- Implementación Pública ---
+
 void room_control_init(room_control_t *room) {
-    room->current_state = STATE_IDLE;
-    room->input_index = 0;
-    memset(room->input_buffer, 0, sizeof(room->input_buffer));
-    memset(room->cardID, 0, 5);
+
+    strcpy(room->stored_password, "1234"); // Tu contraseña del teclado
+    room->failed_attempts = 0;
+    clear_input(room);
     
-    // Hardware Estado Inicial (Puerta Cerrada)
-    room_control_set_servo(0); 
-    HAL_GPIO_WritePin(DOOR_STATUS_GPIO_Port, DOOR_STATUS_Pin, GPIO_PIN_RESET); // LED OFF
+    // Inicializar Drivers
+    MFRC522_Init();
+    servo_init(&door_servo, &htim3, TIM_CHANNEL_1);
     
-    // OLED: Mensaje Inicial
-    ssd1306_Fill(Black);
-    ssd1306_SetCursor(10, 10);
-    ssd1306_WriteString("BIENVENIDO", Font_7x10, White);
-    ssd1306_SetCursor(10, 30);
-    ssd1306_WriteString("Acerque Tarjeta", Font_6x8, White);
-    ssd1306_UpdateScreen();
+    // Estado inicial: Puerta cerrada
+    // Usamos set_angle directo al inicio para asegurar posición cerrada rápido
+    servo_set_angle(&door_servo, 0); 
     
-    // Limpiar buffer del teclado para evitar pulsaciones viejas
-    uint8_t dummy;
-    while(ring_buffer_get(&keypad_rb, &dummy) == 0); 
+    send_log_to_esp("SISTEMA: Listo. Acerque su tarjeta...");
+    room_control_change_state(room, ROOM_STATE_WAITING_RFID);
 }
 
-// --- UPDATE LOOP ---
 void room_control_update(room_control_t *room) {
-    char msg_buffer[64];
-    uint8_t rb_val = 0;
-    char key_char = 0;
+    uint32_t current_time = HAL_GetTick();
 
     switch (room->current_state) {
-        
-        // 1. ESPERANDO TARJETA
-        case STATE_IDLE:
-            if (MFRC522_Check(room->cardID) == 0) { 
-                // Tarjeta detectada -> Pasamos al siguiente estado
-                room->current_state = STATE_CARD_OK;
-                room->state_enter_time = HAL_GetTick();
+        case ROOM_STATE_WAITING_RFID:
+            process_rfid_check(room);
+            break;
+
+        case ROOM_STATE_INPUT_PIN:
+            // Timeout de 10s si no escribe nada
+            if (current_time - room->last_activity_time > 10000) {
+                send_log_to_esp("TIMEOUT: Volviendo a inicio");
+                room_control_change_state(room, ROOM_STATE_WAITING_RFID);
             }
             break;
 
-        // 2. TARJETA OK: ABRIR PUERTA Y PEDIR CLAVE
-        case STATE_CARD_OK:
-            // Acción Física: Servo 90 grados, LED ON
-            room_control_set_servo(90);
-            HAL_GPIO_WritePin(DOOR_STATUS_GPIO_Port, DOOR_STATUS_Pin, GPIO_PIN_SET);
-            
-            // Acción Visual: Pedir Clave
-            ssd1306_Fill(Black);
-            ssd1306_SetCursor(10, 10);
-            ssd1306_WriteString("ACCESO OK", Font_11x18, White);
-            ssd1306_SetCursor(0, 40);
-            ssd1306_WriteString("Clave:", Font_7x10, White);
-            ssd1306_UpdateScreen();
-            
-            room->input_index = 0;
-            memset(room->input_buffer, 0, sizeof(room->input_buffer));
-            room->current_state = STATE_WAITING_KEY;
-            room->state_enter_time = HAL_GetTick();
-            break;
-
-        // 3. ESPERANDO TECLADO (Leyendo Buffer)
-        case STATE_WAITING_KEY:
-            // Leemos del Ring Buffer (NO BLOQUEANTE)
-            if (ring_buffer_get(&keypad_rb, &rb_val) == 0) {
-                key_char = (char)rb_val;
-                
-                if (key_char == '#') { // Tecla Enter
-                    if (strcmp(room->input_buffer, VALID_PASSWORD) == 0) {
-                        room->current_state = STATE_SENDING_DATA; // Clave Correcta
-                    } else {
-                        // Clave Incorrecta
-                        ssd1306_Fill(Black);
-                        ssd1306_WriteString("CLAVE MAL", Font_11x18, White);
-                        ssd1306_UpdateScreen();
-                        HAL_Delay(1500);
-                        room->current_state = STATE_RESET;
-                    }
-                } 
-                else if (key_char == '*') { // Tecla Borrar
-                    room->input_index = 0;
-                    memset(room->input_buffer, 0, sizeof(room->input_buffer));
-                }
-                else if (room->input_index < PASSWORD_LENGTH) { // Digitar número
-                    room->input_buffer[room->input_index++] = key_char;
-                    // Mostrar asterisco
-                    ssd1306_SetCursor(10 + (room->input_index * 10), 50);
-                    ssd1306_WriteString("*", Font_11x18, White);
-                    ssd1306_UpdateScreen();
-                }
-            }
-            // Timeout de 15 segundos si no escribe
-            if (HAL_GetTick() - room->state_enter_time > 15000) {
-                room->current_state = STATE_RESET;
+        case ROOM_STATE_UNLOCKED:
+            // Mantener abierta 5 segundos (DOOR_OPEN_DURATION_MS)
+            if (current_time - room->state_enter_time > DOOR_OPEN_DURATION_MS) {
+                room_control_change_state(room, ROOM_STATE_WAITING_RFID);
             }
             break;
 
-        // 4. ENVIAR A ESP-01
-        case STATE_SENDING_DATA:
-            ssd1306_Fill(Black);
-            ssd1306_WriteString("ENVIANDO...", Font_7x10, White);
-            ssd1306_UpdateScreen();
+        case ROOM_STATE_ACCESS_DENIED:
+            if (current_time - room->state_enter_time > 3000) {
+                room_control_change_state(room, ROOM_STATE_WAITING_RFID);
+            }
+            break;
             
-            // Construir mensaje UART: "UID:XXXX PIN:1234"
-            sprintf(msg_buffer, "UID:%02X%02X PIN:%s\r\n", 
-                    room->cardID[0], room->cardID[1], room->input_buffer);
-            
-            // Enviar mensaje
-            HAL_UART_Transmit(&huart1, (uint8_t*)msg_buffer, strlen(msg_buffer), 500);
-            
-            HAL_Delay(1000);
-            room->current_state = STATE_RESET;
+        case ROOM_STATE_SYSTEM_LOCKOUT:
+            if (current_time - room->state_enter_time > LOCKOUT_DURATION_MS) {
+                room->failed_attempts = 0; 
+                room_control_change_state(room, ROOM_STATE_WAITING_RFID);
+            }
             break;
 
-        // 5. RESETEAR SISTEMA
-        case STATE_RESET:
-            room_control_init(room); // Cierra puerta, apaga LED, vuelve a inicio
-            break;
+        default: break;
     }
+
+    if (room->display_update_needed) {
+        room_control_update_display(room);
+        room->display_update_needed = false;
+    }
+}
+
+void room_control_process_key(room_control_t *room, char key) {
+    room->last_activity_time = HAL_GetTick();
+
+    if (room->current_state == ROOM_STATE_INPUT_PIN) {
+        // Feedback en serial para ver qué tecla presionas
+        char msg[20];
+        sprintf(msg, "Tecla: %c", key);
+        send_log_to_esp(msg);
+
+        if (room->input_index < PASSWORD_LENGTH) {
+            room->input_buffer[room->input_index++] = key;
+            room->input_buffer[room->input_index] = '\0'; 
+            room->display_update_needed = true;
+
+            if (room->input_index == PASSWORD_LENGTH) {
+                room_control_change_state(room, ROOM_STATE_CHECK_PIN);
+            }
+        }
+    }
+}
+
+// --- Funciones Privadas ---
+
+static void room_control_change_state(room_control_t *room, room_state_t new_state) {
+    room->current_state = new_state;
+    room->state_enter_time = HAL_GetTick();
+    room->last_activity_time = HAL_GetTick();
+    room->display_update_needed = true;
+
+    switch (new_state) {
+        case ROOM_STATE_WAITING_RFID:
+            control_servo_action(false); // Cierra la puerta
+            clear_input(room);
+            break;
+
+        case ROOM_STATE_CHECK_PIN:
+            if (strcmp(room->input_buffer, room->stored_password) == 0) {
+                room_control_change_state(room, ROOM_STATE_UNLOCKED);
+            } else {
+                room->failed_attempts++;
+                send_log_to_esp("ERROR: PIN Incorrecto");
+                
+                if (room->failed_attempts >= MAX_PIN_RETRIES) {
+                    send_log_to_esp("ALERTA: Sistema Bloqueado");
+                    room_control_change_state(room, ROOM_STATE_SYSTEM_LOCKOUT);
+                } else {
+                    room_control_change_state(room, ROOM_STATE_ACCESS_DENIED);
+                }
+            }
+            break;
+
+        case ROOM_STATE_UNLOCKED:
+            send_log_to_esp("ACCESO CONCEDIDO: Abriendo puerta...");
+            control_servo_action(true); // Abre suavemente
+            room->failed_attempts = 0; 
+            break;
+
+        case ROOM_STATE_ACCESS_DENIED:
+            clear_input(room);
+            break;
+            
+        default: break;
+    }
+}
+
+static void process_rfid_check(room_control_t *room) {
+    uint8_t str[5]; 
+
+    // Usamos 0x52 (REQALL) para mejor detección
+    if (MFRC522_Request(0x52, str) == MI_OK) {
+        if (MFRC522_Anticoll(str) == MI_OK) {
+            
+            // --- AQUI ESTA LA CLAVE: Imprime los 4 bytes ---
+            char log_msg[64];
+            sprintf(log_msg, "COPIA ESTO -> 0x%02X, 0x%02X, 0x%02X, 0x%02X", 
+                    str[0], str[1], str[2], str[3]);
+            send_log_to_esp(log_msg);
+            // ------------------------------------------------
+            
+            if (MFRC522_Compare(str, VALID_CARD_UID) == MI_OK) {
+                send_log_to_esp("TARJETA OK -> Ingrese PIN");
+                room_control_change_state(room, ROOM_STATE_INPUT_PIN);
+            } else {
+                send_log_to_esp("TARJETA RECHAZADA (No está en la lista)");
+                room_control_change_state(room, ROOM_STATE_ACCESS_DENIED);
+            }
+            
+            HAL_Delay(1000); // Pausa para no leer mil veces la misma
+        }
+    }
+}
+
+static void control_servo_action(bool open) {
+    if (open) {
+        // MOVIMIENTO LENTO: Abre a 90 grados, 20ms de espera por grado
+        // Si tu puerta abre a 180, cambia 90 por 180
+        servo_move_slow(&door_servo, 90, 20); 
+    } else {
+        // Cierra suavemente a 0 grados
+        servo_move_slow(&door_servo, 0, 20);
+    }
+}
+
+static void send_log_to_esp(const char* message) {
+    char buffer[128];
+    sprintf(buffer, "[LOG] %s\r\n", message);
+    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+}
+
+static void clear_input(room_control_t *room) {
+    memset(room->input_buffer, 0, sizeof(room->input_buffer));
+    room->input_index = 0;
+}
+
+static void room_control_update_display(room_control_t *room) {
+    ssd1306_Fill(Black);
+    
+    // Coordenadas (0,0) para asegurar que se vea en pantallas partidas
+    switch (room->current_state) {
+        case ROOM_STATE_WAITING_RFID:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("BIENVENIDO", Font_7x10, White);
+            ssd1306_SetCursor(0, 12);
+            ssd1306_WriteString("Pase Tarjeta", Font_7x10, White);
+            break;
+        case ROOM_STATE_INPUT_PIN:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("PIN:", Font_7x10, White);
+            ssd1306_SetCursor(35, 0);
+            for(int i=0; i<room->input_index; i++) ssd1306_WriteChar('*', Font_7x10, White);
+            break;
+        case ROOM_STATE_UNLOCKED:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("ACCESO", Font_7x10, White);
+            ssd1306_SetCursor(0, 12);
+            ssd1306_WriteString("CONCEDIDO", Font_7x10, White);
+            break;
+        case ROOM_STATE_ACCESS_DENIED:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("DENEGADO", Font_7x10, White);
+            break;
+        case ROOM_STATE_SYSTEM_LOCKOUT:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("BLOQUEADO", Font_7x10, White);
+            break;
+        default: break;
+    }
+    ssd1306_UpdateScreen();
 }

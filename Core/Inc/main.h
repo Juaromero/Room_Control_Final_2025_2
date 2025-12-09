@@ -74,8 +74,8 @@ void Error_Handler(void);
 #define DOOR_STATUS_GPIO_Port GPIOA
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
-#define FAN_PWM_Pin GPIO_PIN_6
-#define FAN_PWM_GPIO_Port GPIOA
+#define SERVO_PWM_Pin GPIO_PIN_6
+#define SERVO_PWM_GPIO_Port GPIOA
 #define RFID_CS_Pin GPIO_PIN_4
 #define RFID_CS_GPIO_Port GPIOC
 #define RFID_RST_Pin GPIO_PIN_5

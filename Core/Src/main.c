@@ -29,7 +29,6 @@
 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
-#include "rc522.h"
 
 /* USER CODE END Includes */
 
@@ -83,7 +82,6 @@ volatile uint16_t keypad_interrupt_pin = 0;
 
 // Room control system instance
 room_control_t room_system;
-room_control_t myRoom;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -119,10 +117,21 @@ void write_to_oled(char *message, SSD1306_COLOR color, uint8_t x, uint8_t y)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+  // 1. Si es el botón azul (B1)
   if (GPIO_Pin == B1_Pin) {
-    button_pressed = 1; // Set the flag when the button is pressed
-  } else {
-    keypad_interrupt_pin = GPIO_Pin;
+    button_pressed = 1;
+  } 
+  // 2. Si es alguna columna del teclado (C1, C2, C3, C4)
+  else if (GPIO_Pin == KEYPAD_C1_Pin || GPIO_Pin == KEYPAD_C2_Pin || 
+           GPIO_Pin == KEYPAD_C3_Pin || GPIO_Pin == KEYPAD_C4_Pin) 
+  {
+      // A. Escanear inmediatamente qué tecla fue
+      char key = keypad_scan(&keypad, GPIO_Pin);
+      
+      // B. Si es válida, GUARDAR EN EL BUFFER (Esto es lo que faltaba)
+      if (key != '\0') {
+          ring_buffer_write(&keypad_rb, (uint8_t)key);
+      }
   }
 }
 
@@ -186,13 +195,13 @@ int main(void)
   ring_buffer_init(&keypad_rb, keypad_buffer, KEYPAD_BUFFER_LEN);
   keypad_init(&keypad);
   
-  // TODO: TAREA - Descomentar cuando implementen la lógica del sistema
-  // room_control_init(&room_system);
+  room_control_init(&room_system);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  
   // Clear the display
   ssd1306_Fill(Black);
   write_to_oled("Hello, 4100901!", White, 17, 17);
@@ -201,38 +210,27 @@ int main(void)
     heartbeat(); // Call the heartbeat function to toggle the LED
 
     // TODO: TAREA - Descomentar cuando implementen la máquina de estados
-    // room_control_update(&room_system);
+    room_control_update(&room_system);
 
-    // DEMO: Keypad functionality - Remove when implementing room control logic
-    if (keypad_interrupt_pin != 0) {
-      char key = keypad_scan(&keypad, keypad_interrupt_pin);
-      if (key != '\0') {
-        write_to_oled(&key, White, 31, 31);
+    // C. Procesamiento de Teclado (Limpio y Optimizado)
+    uint8_t key_val;
+    
+    // Revisamos si el buffer tiene teclas pendientes (gracias a la interrupción)
+    if (ring_buffer_read(&keypad_rb, &key_val)) {
+        char key = (char)key_val;
         
-        // TODO: TAREA - Descomentar para enviar teclas al sistema de control
-        // room_control_process_key(&room_system, key);
-      }
-      keypad_interrupt_pin = 0;
+        // 1. Mostrar en Monitor Serial (Feedback)
+        printf("[TECLADO] Tecla: %c\r\n", key); 
+        
+        // 2. Enviar al cerebro para validar PIN
+        room_control_process_key(&room_system, key);
     }
 
-    // DEMO: Button functionality - Remove when implementing room control logic  
-    if (button_pressed) {
-      write_to_oled("Button Pressed!", White, 17, 17); // Display message on OLED
-      button_pressed = 0; // Reset the flag
-    }
-
-    // DEMO: UART functionality - Remove when implementing room control logic
-    if (usart_2_rxbyte != 0) {
-      write_to_oled((char *)&usart_2_rxbyte, White, 31, 31); // Display received byte on OLED
-      usart_2_rxbyte = 0; // Reset the received byte variable
-    }
+    // D. Delay mínimo para estabilidad
+    HAL_Delay(10);
 
     // TODO: TAREA - Implementar procesamiento de comandos remotos
     // command_parser_process(); // Procesar comandos de UART2 y UART3
-    
-    // TODO: TAREA - Leer sensor de temperatura y actualizar sistema
-    // float temperature = temperature_sensor_read();
-    // room_control_set_temperature(&room_system, temperature);
     
     /* USER CODE END WHILE */
 
@@ -361,7 +359,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -526,20 +524,20 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : KEYPAD_C1_Pin */
   GPIO_InitStruct.Pin = KEYPAD_C1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(KEYPAD_C1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : KEYPAD_C4_Pin */
   GPIO_InitStruct.Pin = KEYPAD_C4_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(KEYPAD_C4_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : KEYPAD_C2_Pin KEYPAD_C3_Pin */
   GPIO_InitStruct.Pin = KEYPAD_C2_Pin|KEYPAD_C3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : KEYPAD_R2_Pin KEYPAD_R4_Pin KEYPAD_R3_Pin */

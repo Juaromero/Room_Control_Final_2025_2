@@ -50,6 +50,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/ssd1306/ssd1306.c
     Drivers/ssd1306/ssd1306_fonts.c
     Drivers/keypad/keypad.c
+    Drivers/SERVO/servo_control.c
+    Drivers/RFID/rc522.c
     Core/Src/room_control.c
     # Add user sources here
 )
@@ -60,6 +62,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/ring_buffer
     Drivers/ssd1306
     Drivers/keypad
+    Drivers/SERVO
+    Drivers/RFID
     # Add user defined include paths
 )
 
