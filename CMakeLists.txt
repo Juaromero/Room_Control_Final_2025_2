@@ -64,6 +64,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/keypad
     Drivers/SERVO
     Drivers/RFID
+    Assets/locks_bitmaps
     # Add user defined include paths
 )
 

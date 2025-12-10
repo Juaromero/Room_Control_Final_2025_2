@@ -204,8 +204,7 @@ int main(void)
   
   // Clear the display
   ssd1306_Fill(Black);
-  write_to_oled("Hello, 4100901!", White, 17, 17);
-  printf("Hello, 4100901!\r\n");
+
   while (1) {
     heartbeat(); // Call the heartbeat function to toggle the LED
 
@@ -359,7 +358,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -494,13 +493,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, DOOR_STATUS_Pin|LD2_Pin|KEYPAD_R1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_ROJO_Pin|LED_VERDE_Pin|LD2_Pin|KEYPAD_R1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, RFID_CS_Pin|RFID_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, KEYPAD_R2_Pin|KEYPAD_R4_Pin|KEYPAD_R3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LED_AZUL_Pin|KEYPAD_R2_Pin|KEYPAD_R4_Pin|KEYPAD_R3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -508,8 +507,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : DOOR_STATUS_Pin LD2_Pin KEYPAD_R1_Pin */
-  GPIO_InitStruct.Pin = DOOR_STATUS_Pin|LD2_Pin|KEYPAD_R1_Pin;
+  /*Configure GPIO pins : LED_ROJO_Pin LED_VERDE_Pin LD2_Pin KEYPAD_R1_Pin */
+  GPIO_InitStruct.Pin = LED_ROJO_Pin|LED_VERDE_Pin|LD2_Pin|KEYPAD_R1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -521,6 +520,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LED_AZUL_Pin KEYPAD_R2_Pin KEYPAD_R4_Pin KEYPAD_R3_Pin */
+  GPIO_InitStruct.Pin = LED_AZUL_Pin|KEYPAD_R2_Pin|KEYPAD_R4_Pin|KEYPAD_R3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : KEYPAD_C1_Pin */
   GPIO_InitStruct.Pin = KEYPAD_C1_Pin;
@@ -539,13 +545,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : KEYPAD_R2_Pin KEYPAD_R4_Pin KEYPAD_R3_Pin */
-  GPIO_InitStruct.Pin = KEYPAD_R2_Pin|KEYPAD_R4_Pin|KEYPAD_R3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
