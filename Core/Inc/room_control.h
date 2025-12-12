@@ -54,6 +54,8 @@ typedef struct {
 void room_control_init(room_control_t *room);
 void room_control_update(room_control_t *room);
 void room_control_process_key(room_control_t *room, char key);
+void room_control_remote_byte(room_control_t *room, uint8_t byte);
+void room_control_process_remote(room_control_t *room, const char *cmd);
 
 // Esta función es necesaria si quieres consultar el estado desde main.c
 room_state_t room_control_get_state(room_control_t *room);

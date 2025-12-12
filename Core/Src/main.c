@@ -26,6 +26,7 @@
 #include "ring_buffer.h"
 #include "room_control.h"
 #include <stdio.h>
+#include <string.h>
 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
@@ -56,6 +57,8 @@ TIM_HandleTypeDef htim3;
 DMA_HandleTypeDef hdma_tim3_ch1_trig;
 
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_lpuart1_rx;
 
 /* USER CODE BEGIN PV */
 uint8_t button_pressed = 0; // Flag to indicate if the button is pressed
@@ -65,7 +68,11 @@ led_handle_t heartbeat_led = {
     .pin = LD2_Pin
 };
 
-uint8_t usart_2_rxbyte = 0; // Variable to hold received byte from UART3
+// Byte recibido desde USART2 (PC / Debug)
+uint8_t usart_2_rxbyte = 0;
+
+// Byte recibido desde USART3 (ESP01 / WiFi, si se usa)
+uint8_t usart_3_rxbyte = 0;
 
 keypad_handle_t keypad = {
     .row_ports = {KEYPAD_R1_GPIO_Port, KEYPAD_R2_GPIO_Port, KEYPAD_R3_GPIO_Port, KEYPAD_R4_GPIO_Port},
@@ -82,6 +89,17 @@ volatile uint16_t keypad_interrupt_pin = 0;
 
 // Room control system instance
 room_control_t room_system;
+
+// === Buffers y flags para comandos por UART (USART2/USART3) ===
+#define RX_BUFFER_SIZE 64
+char rx3_buffer[RX_BUFFER_SIZE];   // Buffer compartido para comandos de texto
+
+uint16_t usart2_index = 0;         // Índice de escritura para USART2
+uint16_t rx3_index = 0;            // Índice de escritura para USART3
+
+volatile uint8_t cmd_wifi_ready = 0; // Flag: 1 cuando rx3_buffer contiene un comando completo
+volatile uint8_t rx3_byte = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -92,6 +110,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_SPI2_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -117,15 +136,15 @@ void write_to_oled(char *message, SSD1306_COLOR color, uint8_t x, uint8_t y)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  // 1. Si es el botón azul (B1)
+  keypad_interrupt_pin = GPIO_Pin;
+  
   if (GPIO_Pin == B1_Pin) {
     button_pressed = 1;
-  } 
-  // 2. Si es alguna columna del teclado (C1, C2, C3, C4)
-  else if (GPIO_Pin == KEYPAD_C1_Pin || GPIO_Pin == KEYPAD_C2_Pin || 
+  }
+  else if (GPIO_Pin == KEYPAD_C1_Pin || GPIO_Pin == KEYPAD_C2_Pin ||
            GPIO_Pin == KEYPAD_C3_Pin || GPIO_Pin == KEYPAD_C4_Pin) 
   {
-      // A. Escanear inmediatamente qué tecla fue
+      // A. ESCANEAR EL TECLADO SÓLO CUANDO HAYA UNA INTERRUPCIÓN VÁLIDA
       char key = keypad_scan(&keypad, GPIO_Pin);
       
       // B. Si es válida, GUARDAR EN EL BUFFER (Esto es lo que faltaba)
@@ -137,9 +156,43 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART2) {
-    HAL_UART_Receive_IT(&huart2, &usart_2_rxbyte, 1);
-  }
+    /* ===== USART2 : PC DEBUG ===== */
+    if (huart->Instance == USART2)
+    {
+        // simplemente volver a activar interrupción
+        HAL_UART_Receive_IT(&huart2, &usart_2_rxbyte, 1);
+        return;
+    }
+
+    /* ===== USART3 : ESP-01 ===== */
+    if (huart->Instance == USART3)
+    {
+        if (rx3_byte == '\n' || rx3_byte == '\r') 
+        {
+            if (rx3_index > 0) 
+            {
+                rx3_buffer[rx3_index] = '\0';   // cerrar el string
+                cmd_wifi_ready = 1;             // comando listo
+                rx3_index = 0;
+            }
+        }
+        else
+        {
+            if (rx3_index < RX_BUFFER_SIZE - 1)
+            {
+                rx3_buffer[rx3_index++] = rx3_byte;
+            }
+        }
+
+        // prevención de overflow
+        if (rx3_index >= RX_BUFFER_SIZE - 1)
+        {
+            rx3_index = 0;
+            memset(rx3_buffer, 0, RX_BUFFER_SIZE);
+        }
+
+        HAL_UART_Receive_IT(&huart3, &rx3_byte, 1);
+    }
 }
 
 void heartbeat(void)
@@ -149,6 +202,22 @@ void heartbeat(void)
     led_toggle(&heartbeat_led); // Toggle the heartbeat LED
     last_toggle = HAL_GetTick();
   }
+}
+
+// --- Función que procesa los comandos Wifi ---
+void procesar_comando_wifi(void)
+{
+    if (cmd_wifi_ready)
+    {
+        cmd_wifi_ready = 0;
+
+        printf("[CMD WIFI] %s\r\n", rx3_buffer);
+
+        room_control_process_remote(&room_system, (char*)rx3_buffer);
+
+        // limpiar buffer después de usarlo
+        memset(rx3_buffer, 0, RX_BUFFER_SIZE);
+    }
 }
 
 /* USER CODE END 0 */
@@ -187,10 +256,12 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM3_Init();
   MX_SPI2_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   led_init(&heartbeat_led);
   ssd1306_Init();
   HAL_UART_Receive_IT(&huart2, &usart_2_rxbyte, 1);
+  HAL_UART_Receive_IT(&huart3, &usart_3_rxbyte, 1);
   
   ring_buffer_init(&keypad_rb, keypad_buffer, KEYPAD_BUFFER_LEN);
   keypad_init(&keypad);
@@ -208,33 +279,22 @@ int main(void)
   while (1) {
     heartbeat(); // Call the heartbeat function to toggle the LED
 
-    // TODO: TAREA - Descomentar cuando implementen la máquina de estados
+    // Máquina de estados principal
     room_control_update(&room_system);
 
-    // C. Procesamiento de Teclado (Limpio y Optimizado)
+    // Procesamiento del teclado usando el ring buffer
     uint8_t key_val;
-    
-    // Revisamos si el buffer tiene teclas pendientes (gracias a la interrupción)
     if (ring_buffer_read(&keypad_rb, &key_val)) {
-        char key = (char)key_val;
-        
-        // 1. Mostrar en Monitor Serial (Feedback)
-        printf("[TECLADO] Tecla: %c\r\n", key); 
-        
-        // 2. Enviar al cerebro para validar PIN
-        room_control_process_key(&room_system, key);
+      room_control_process_key(&room_system, (char)key_val);
     }
 
-    // D. Delay mínimo para estabilidad
+    procesar_comando_wifi();
+
     HAL_Delay(10);
-
-    // TODO: TAREA - Implementar procesamiento de comandos remotos
-    // command_parser_process(); // Procesar comandos de UART2 y UART3
-    
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
   }
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
 }
 
@@ -257,13 +317,14 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
+  RCC_OscInitStruct.MSICalibrationValue = 0;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
   RCC_OscInitStruct.PLL.PLLM = 1;
-  RCC_OscInitStruct.PLL.PLLN = 10;
+  RCC_OscInitStruct.PLL.PLLN = 40;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
@@ -456,6 +517,41 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
 
 }
 

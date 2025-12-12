@@ -9,6 +9,7 @@
 
 extern TIM_HandleTypeDef htim3; 
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart3;
 
 // --- CONFIGURACIÓN ---
 uint8_t VALID_CARD_UID[5] = {0x1A, 0x22, 0x73, 0x80, 0xCB}; 
@@ -219,13 +220,24 @@ static void control_servo_action(bool open) {
 
 static void send_log_to_esp(const char* message) {
     char buffer[128];
-    sprintf(buffer, "[LOG] %s\r\n", message);
-    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+    int len = snprintf(buffer, sizeof(buffer), "[LOG] %s\r\n", message);
+    if (len < 0) return;
+    if (len > (int)sizeof(buffer)) len = sizeof(buffer);
+
+    // Consola local (ST-Link, USART2)
+    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, 100);
+
+    // Consola remota (ESP-01, USART3)
+    HAL_UART_Transmit(&huart3, (uint8_t*)buffer, len, 100);
 }
 
 static void clear_input(room_control_t *room) {
     memset(room->input_buffer, 0, sizeof(room->input_buffer));
     room->input_index = 0;
+}
+
+room_state_t room_control_get_state(room_control_t *room) {
+    return room->current_state;
 }
 
 // --- PANTALLA (DISEÑO ORIGINAL MANTENIDO) ---
@@ -277,4 +289,44 @@ static void room_control_update_display(room_control_t *room) {
         default: break;
     }
     ssd1306_UpdateScreen();
+}
+
+void room_control_process_remote(room_control_t *room, const char *cmd)
+{
+    if (strcmp(cmd, "OPEN") == 0) {
+        room_control_change_state(room, ROOM_STATE_UNLOCKED);
+        send_log_to_esp("REMOTE: OPEN");
+        return;
+    }
+
+    if (strcmp(cmd, "CLOSE") == 0) {
+        room_control_change_state(room, ROOM_STATE_WAITING_RFID);
+        send_log_to_esp("REMOTE: CLOSE");
+        return;
+    }
+
+    if (strcmp(cmd, "LOCKOUT") == 0) {
+        room_control_change_state(room, ROOM_STATE_SYSTEM_LOCKOUT);
+        send_log_to_esp("REMOTE: LOCKOUT");
+        return;
+    }
+
+    if (strcmp(cmd, "STATUS") == 0) {
+        char msg[32];
+        sprintf(msg, "STATUS:%d", room->current_state);
+        send_log_to_esp(msg);
+        return;
+    }
+
+    // Cambiar contraseña
+    if (strncmp(cmd, "SET_PASS:", 9) == 0) {
+        const char *nueva = cmd + 9;
+
+        if (strlen(nueva) == 4) {
+            strcpy(room->stored_password, nueva);
+            send_log_to_esp("CLAVE ACTUALIZADA");
+        } else {
+            send_log_to_esp("ERROR: PIN INVALIDO");
+        }
+    }
 }
